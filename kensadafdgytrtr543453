@@ -1,100 +1,179 @@
---[[
-    🎨 YUN V2 LIBRARY - MODERN REDESIGN
-    Modern UI Library with RGB, Themes, and Advanced Features
-]]
 
-local YunV2 = {}
-
--- Services
-local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
 local CoreGui = game:GetService("CoreGui")
-local HttpService = game:GetService("HttpService")
 
--- Default Colors
-local DefaultColors = {
-    Main = Color3.fromRGB(40, 40, 40),
-    Secondary = Color3.fromRGB(30, 30, 30),
-    Accent = Color3.fromRGB(0, 170, 255),
-    Text = Color3.fromRGB(240, 240, 240),
-    Success = Color3.fromRGB(0, 200, 83),
-    Error = Color3.fromRGB(255, 76, 76),
-    Warning = Color3.fromRGB(255, 193, 7)
+local LocalPlayer = Players.LocalPlayer
+
+local Settings = {
+
+    teamCheck = false,
+    fov = 150,
+    smoothing = 0.15,
+    predictionFactor = 0.165,
+    aimbotEnabled = true,
+    Toggle = false,
+
+    lockMode = "Head",
+
+    espEnabled = true,
+    espType = "2D Box",
+    espBoxes = true,
+    espNames = true,
+    espDistance = true,
+    espHealth = true,
+    espTracers = false,
+    espTeamColor = true,
+
+    useRGBColors = true,
+    rgbSpeed = 1.0,
+    espColor = Color3.fromRGB(0, 255, 255),
+    espColor2 = Color3.fromRGB(255, 0, 255),
+    espRainbow = true,
+    
+
+    boxThickness = 1,
+    boxTransparency = 0.7,
+    skeletonThickness = 1,
+    skeletonTransparency = 0.5,
+    cornerSize = 5,
+
+    showFOV = true,
+    fovFilled = false,
+    fovThickness = 2,
+    fovColor = Color3.fromRGB(255, 50, 50)
 }
 
--- Themes
-local Themes = {
-    Default = {
-        Main = Color3.fromRGB(40, 40, 40),
-        Secondary = Color3.fromRGB(30, 30, 30),
-        Accent = Color3.fromRGB(0, 170, 255),
-        Text = Color3.fromRGB(240, 240, 240)
-    },
-    Dark = {
-        Main = Color3.fromRGB(25, 25, 25),
-        Secondary = Color3.fromRGB(15, 15, 15),
-        Accent = Color3.fromRGB(255, 100, 100),
-        Text = Color3.fromRGB(220, 220, 220)
-    },
-    Purple = {
-        Main = Color3.fromRGB(45, 30, 60),
-        Secondary = Color3.fromRGB(35, 20, 50),
-        Accent = Color3.fromRGB(180, 70, 255),
-        Text = Color3.fromRGB(240, 220, 255)
-    },
-    Cyber = {
-        Main = Color3.fromRGB(10, 20, 40),
-        Secondary = Color3.fromRGB(0, 10, 25),
-        Accent = Color3.fromRGB(0, 255, 255),
-        Text = Color3.fromRGB(255, 255, 255)
-    },
-    Sunset = {
-        Main = Color3.fromRGB(60, 30, 40),
-        Secondary = Color3.fromRGB(40, 20, 30),
-        Accent = Color3.fromRGB(255, 150, 50),
-        Text = Color3.fromRGB(255, 240, 220)
-    },
-    Forest = {
-        Main = Color3.fromRGB(30, 50, 40),
-        Secondary = Color3.fromRGB(20, 40, 30),
-        Accent = Color3.fromRGB(80, 220, 140),
-        Text = Color3.fromRGB(220, 255, 230)
-    }
-}
 
--- Utility Functions
-local function Create(class, props)
-    local obj = Instance.new(class)
-    for prop, value in pairs(props) do
-        if prop ~= "Parent" then
-            if pcall(function() return obj[prop] end) then
-                obj[prop] = value
-            end
+local currentTarget = nil
+local toggleState = false
+local espObjects = {}
+local rgbHue = 0
+local camera = Workspace.CurrentCamera
+
+local FOVring = Drawing.new("Circle")
+FOVring.Visible = Settings.showFOV
+FOVring.Thickness = Settings.fovThickness
+FOVring.Radius = Settings.fov
+FOVring.Transparency = 0.8
+FOVring.Color = Settings.fovColor
+FOVring.Filled = Settings.fovFilled
+FOVring.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+
+-- ============================================
+-- AIMBOT CORE FUNCTIONS
+-- ============================================
+local function getClosestPlayer()
+    if not Settings.aimbotEnabled then return nil end
+    if not LocalPlayer.Character then return nil end
+    
+    local closestPlayer = nil
+    local closestDistance = Settings.fov
+    local screenCenter = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+    
+    local localCharacter = LocalPlayer.Character
+    local localHumanoidRootPart = localCharacter:FindFirstChild("HumanoidRootPart")
+    if not localHumanoidRootPart then return nil end
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if Settings.teamCheck and player.Team == LocalPlayer.Team then continue end
+        
+        local character = player.Character
+        if not character then continue end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+        local head = character:FindFirstChild("Head")
+        
+        if not (humanoid and humanoidRootPart and head) then continue end
+        if humanoid.Health <= 0 then continue end
+
+        local screenPosition, onScreen = camera:WorldToViewportPoint(humanoidRootPart.Position)
+        if not onScreen then continue end
+
+        local screenPos = Vector2.new(screenPosition.X, screenPosition.Y)
+        local distance = (screenPos - screenCenter).Magnitude
+        
+
+        if distance <= closestDistance then
+            closestDistance = distance
+            closestPlayer = player
         end
     end
-    if props.Parent then
-        obj.Parent = props.Parent
+    
+    return closestPlayer
+end
+
+local function getTargetPosition(player)
+    if not player or not player.Character then return nil end
+    
+    local character = player.Character
+    local targetPart = character:FindFirstChild(Settings.lockMode)
+    
+    if not targetPart then
+        targetPart = character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
     end
-    return obj
+    
+    if not targetPart then return nil end
+
+    local velocity = targetPart.AssemblyLinearVelocity
+    local distance = (targetPart.Position - camera.CFrame.Position).Magnitude
+    local travelTime = distance / 1000 -- Simple prediction formula
+    
+    return targetPart.Position + (velocity * travelTime * Settings.predictionFactor)
 end
 
-local function Tween(obj, props, duration, easingStyle, easingDirection)
-    local tweenInfo = TweenInfo.new(
-        duration or 0.3,
-        easingStyle or Enum.EasingStyle.Quint,
-        easingDirection or Enum.EasingDirection.Out
-    )
-    local tween = TweenService:Create(obj, tweenInfo, props)
-    tween:Play()
-    return tween
+local function aimAtPosition(targetPosition)
+    if not targetPosition then return end
+    if not LocalPlayer.Character then return end
+    
+    local camera = Workspace.CurrentCamera
+    local currentCameraCFrame = camera.CFrame
+
+    local direction = (targetPosition - currentCameraCFrame.Position).Unit
+
+    local newCFrame = CFrame.new(currentCameraCFrame.Position, currentCameraCFrame.Position + direction)
+
+    local smoothedCFrame = currentCameraCFrame:Lerp(newCFrame, Settings.smoothing)
+
+    camera.CFrame = smoothedCFrame
 end
 
--- HSV to RGB for RGB Mode
+local function updateAimbot()
+    if not Settings.aimbotEnabled then 
+        currentTarget = nil
+        return 
+    end
+    
+
+    if Settings.Toggle and not toggleState then
+        currentTarget = nil
+        return
+    end
+    
+    -- Get closest player
+    local closestPlayer = getClosestPlayer()
+    
+    if closestPlayer then
+        currentTarget = closestPlayer
+        local targetPosition = getTargetPosition(closestPlayer)
+        
+        if targetPosition then
+            aimAtPosition(targetPosition)
+        end
+    else
+        currentTarget = nil
+    end
+end
+
+-- ============================================
+-- RGB COLOR SYSTEM
+-- ============================================
 local function HSVtoRGB(h, s, v)
     local r, g, b
-    
     local i = math.floor(h * 6)
     local f = h * 6 - i
     local p = v * (1 - s)
@@ -117,819 +196,878 @@ local function HSVtoRGB(h, s, v)
         r, g, b = v, p, q
     end
     
-    return Color3.fromRGB(r * 255, g * 255, b * 255)
+    return Color3.new(r, g, b)
 end
 
--- Window Class
-local Window = {}
-Window.__index = Window
+local function getRainbowColor()
+    rgbHue = (rgbHue + (Settings.rgbSpeed * 0.01)) % 1
+    return HSVtoRGB(rgbHue, 1, 1)
+end
 
-function Window.new(config)
-    local self = setmetatable({}, Window)
+local function getGradientColor()
+    if not Settings.useRGBColors then
+        return Settings.espColor
+    end
     
-    self.config = {
-        name = config.name or "Yun V2",
-        sizeX = config.sizeX or 500,
-        sizeY = config.sizeY or 600,
-        color = config.color or DefaultColors.Accent,
-        theme = config.theme or "Default",
-        showLogo = config.showLogo ~= false,
-        watermark = config.watermark or false,
-        rgbMode = config.rgbMode or false
+    if Settings.espRainbow then
+        return getRainbowColor()
+    else
+        local t = (math.sin(tick() * Settings.rgbSpeed) + 1) / 2
+        return Settings.espColor:Lerp(Settings.espColor2, t)
+    end
+end
+
+local function getTeamColor(player)
+    if not Settings.espTeamColor then
+        return getGradientColor()
+    end
+    
+    if player.Team == LocalPlayer.Team then
+        return Color3.fromRGB(0, 150, 255) -- Blue for team
+    else
+        return Color3.fromRGB(255, 50, 50) -- Red for enemies
+    end
+end
+
+-- ============================================
+-- 2D ESP SYSTEM
+-- ============================================
+local function createESP(player)
+    if player == LocalPlayer or espObjects[player] then return end
+    
+    local esp = {
+        box = Drawing.new("Square"),
+        boxOutline = Drawing.new("Square"),
+        name = Drawing.new("Text"),
+        distance = Drawing.new("Text"),
+        health = Drawing.new("Text"),
+        tracer = Drawing.new("Line"),
+        skeleton = {},
+        corners = {}
     }
     
-    self.tabs = {}
-    self.flags = {}
-    self.currentTheme = Themes[self.config.theme] or Themes.Default
-    self.rgbHue = 0
-    self.rgbSpeed = 3
-    self.visible = true
+    -- Box ESP
+    esp.box.Visible = false
+    esp.box.Thickness = Settings.boxThickness
+    esp.box.Filled = false
+    esp.box.Transparency = Settings.boxTransparency
+    esp.box.Color = Settings.espColor
     
-    self:CreateUI()
+    esp.boxOutline.Visible = false
+    esp.boxOutline.Thickness = Settings.boxThickness + 2
+    esp.boxOutline.Filled = false
+    esp.boxOutline.Transparency = Settings.boxTransparency
+    esp.boxOutline.Color = Color3.fromRGB(0, 0, 0)
     
-    -- Start RGB loop if enabled
-    if self.config.rgbMode then
-        self:StartRGBLoop()
+    -- Name ESP
+    esp.name.Visible = false
+    esp.name.Size = 14
+    esp.name.Center = true
+    esp.name.Outline = true
+    esp.name.OutlineColor = Color3.fromRGB(0, 0, 0)
+    esp.name.Color = Settings.espColor
+    
+    -- Distance ESP
+    esp.distance.Visible = false
+    esp.distance.Size = 12
+    esp.distance.Center = true
+    esp.distance.Outline = true
+    esp.distance.OutlineColor = Color3.fromRGB(0, 0, 0)
+    esp.distance.Color = Settings.espColor
+    
+    -- Health ESP
+    esp.health.Visible = false
+    esp.health.Size = 12
+    esp.health.Center = true
+    esp.health.Outline = true
+    esp.health.OutlineColor = Color3.fromRGB(0, 0, 0)
+    
+    -- Tracer ESP
+    esp.tracer.Visible = false
+    esp.tracer.Thickness = 1
+    esp.tracer.Transparency = 0.5
+    esp.tracer.Color = Settings.espColor
+    
+    -- Create skeleton lines if needed
+    if Settings.espType == "Skeleton" then
+        local boneConnections = {
+            {"Head", "UpperTorso"},
+            {"UpperTorso", "LowerTorso"},
+            {"UpperTorso", "LeftUpperArm"},
+            {"UpperTorso", "RightUpperArm"},
+            {"LowerTorso", "LeftUpperLeg"},
+            {"LowerTorso", "RightUpperLeg"},
+            {"LeftUpperArm", "LeftLowerArm"},
+            {"RightUpperArm", "RightLowerArm"},
+            {"LeftLowerArm", "LeftHand"},
+            {"RightLowerArm", "RightHand"},
+            {"LeftUpperLeg", "LeftLowerLeg"},
+            {"RightUpperLeg", "RightLowerLeg"},
+            {"LeftLowerLeg", "LeftFoot"},
+            {"RightLowerLeg", "RightFoot"}
+        }
+        
+        for i = 1, #boneConnections do
+            local line = Drawing.new("Line")
+            line.Visible = false
+            line.Thickness = Settings.skeletonThickness
+            line.Transparency = Settings.skeletonTransparency
+            line.Color = Settings.espColor
+            table.insert(esp.skeleton, line)
+        end
     end
     
-    return self
+    -- Create corner boxes if needed
+    if Settings.espType == "Corner" then
+        for i = 1, 8 do
+            local corner = Drawing.new("Square")
+            corner.Visible = false
+            corner.Thickness = 1
+            corner.Filled = true
+            corner.Transparency = 0.5
+            corner.Size = Vector2.new(Settings.cornerSize, Settings.cornerSize)
+            corner.Color = Settings.espColor
+            table.insert(esp.corners, corner)
+        end
+    end
+    
+    espObjects[player] = esp
+    return esp
 end
 
-function Window:CreateUI()
-    -- Main ScreenGui
-    self.screenGui = Create("ScreenGui", {
-        Name = "YunV2_" .. self.config.name,
-        DisplayOrder = 999,
-        ResetOnSpawn = false
-    })
-    
-    if gethui then
-        self.screenGui.Parent = gethui()
-    elseif syn and syn.protect_gui then
-        syn.protect_gui(self.screenGui)
-        self.screenGui.Parent = CoreGui
-    else
-        self.screenGui.Parent = CoreGui
+local function updateESP()
+    if not Settings.espEnabled then
+        for _, esp in pairs(espObjects) do
+            esp.box.Visible = false
+            esp.boxOutline.Visible = false
+            esp.name.Visible = false
+            esp.distance.Visible = false
+            esp.health.Visible = false
+            esp.tracer.Visible = false
+            
+            for _, line in ipairs(esp.skeleton) do
+                line.Visible = false
+            end
+            
+            for _, corner in ipairs(esp.corners) do
+                corner.Visible = false
+            end
+        end
+        return
     end
     
-    -- Main Frame
-    self.mainFrame = Create("Frame", {
-        Parent = self.screenGui,
-        Size = UDim2.new(0, self.config.sizeX, 0, self.config.sizeY),
-        Position = UDim2.new(0.5, -self.config.sizeX/2, 0.5, -self.config.sizeY/2),
-        BackgroundColor3 = self.currentTheme.Main,
-        BorderSizePixel = 0,
-        ClipsDescendants = true
-    })
+    for player, esp in pairs(espObjects) do
+        if not player or not player.Character then
+            esp.box.Visible = false
+            esp.boxOutline.Visible = false
+            esp.name.Visible = false
+            esp.distance.Visible = false
+            esp.health.Visible = false
+            esp.tracer.Visible = false
+            continue
+        end
+        
+        local character = player.Character
+        local humanoid = character:FindFirstChild("Humanoid")
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        local head = character:FindFirstChild("Head")
+        
+        if not (humanoid and hrp and head) or humanoid.Health <= 0 then
+            esp.box.Visible = false
+            esp.boxOutline.Visible = false
+            esp.name.Visible = false
+            esp.distance.Visible = false
+            esp.health.Visible = false
+            esp.tracer.Visible = false
+            continue
+        end
+        
+        local screenPos, onScreen = camera:WorldToViewportPoint(hrp.Position)
+        if not onScreen then
+            esp.box.Visible = false
+            esp.boxOutline.Visible = false
+            esp.name.Visible = false
+            esp.distance.Visible = false
+            esp.health.Visible = false
+            esp.tracer.Visible = false
+            continue
+        end
+        
+        -- Get ESP color
+        local espColor = getTeamColor(player)
+        if Settings.useRGBColors then
+            espColor = getRainbowColor()
+        end
+        
+        -- Calculate box size
+        local headScreenPos = camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+        local feetScreenPos = camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
+        
+        local height = math.abs(headScreenPos.Y - feetScreenPos.Y)
+        local width = height / 2
+        local boxPosition = Vector2.new(screenPos.X - width/2, screenPos.Y - height/2)
+        local boxSize = Vector2.new(width, height)
+        
+        -- Update Box ESP
+        if Settings.espBoxes and Settings.espType == "2D Box" then
+            esp.box.Visible = true
+            esp.boxOutline.Visible = true
+            esp.box.Size = boxSize
+            esp.box.Position = boxPosition
+            esp.box.Color = espColor
+            
+            esp.boxOutline.Size = boxSize
+            esp.boxOutline.Position = boxPosition
+        else
+            esp.box.Visible = false
+            esp.boxOutline.Visible = false
+        end
+        
+        -- Update Name ESP
+        if Settings.espNames then
+            esp.name.Visible = true
+            esp.name.Text = player.Name
+            esp.name.Position = Vector2.new(screenPos.X, screenPos.Y - height/2 - 20)
+            esp.name.Color = espColor
+        else
+            esp.name.Visible = false
+        end
+        
+        -- Update Distance ESP
+        if Settings.espDistance and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local distance = math.floor((hrp.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude)
+            esp.distance.Visible = true
+            esp.distance.Text = tostring(distance) .. "m"
+            esp.distance.Position = Vector2.new(screenPos.X, screenPos.Y + height/2 + 5)
+            esp.distance.Color = espColor
+        else
+            esp.distance.Visible = false
+        end
+        
+        -- Update Health ESP
+        if Settings.espHealth then
+            local healthPercent = math.floor((humanoid.Health / humanoid.MaxHealth) * 100)
+            esp.health.Visible = true
+            esp.health.Text = tostring(healthPercent) .. "%"
+            esp.health.Position = Vector2.new(screenPos.X, screenPos.Y + height/2 + 20)
+            
+            local healthColor = Color3.fromRGB(
+                255 - (healthPercent * 2.55),
+                healthPercent * 2.55,
+                0
+            )
+            esp.health.Color = healthColor
+        else
+            esp.health.Visible = false
+        end
+        
+        -- Update Tracer ESP
+        if Settings.espTracers then
+            esp.tracer.Visible = true
+            esp.tracer.From = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y)
+            esp.tracer.To = Vector2.new(screenPos.X, screenPos.Y)
+            esp.tracer.Color = espColor
+        else
+            esp.tracer.Visible = false
+        end
+        
+        -- Update Skeleton ESP
+        if Settings.espType == "Skeleton" then
+            local boneConnections = {
+                {"Head", "UpperTorso"},
+                {"UpperTorso", "LowerTorso"},
+                {"UpperTorso", "LeftUpperArm"},
+                {"UpperTorso", "RightUpperArm"},
+                {"LowerTorso", "LeftUpperLeg"},
+                {"LowerTorso", "RightUpperLeg"},
+                {"LeftUpperArm", "LeftLowerArm"},
+                {"RightUpperArm", "RightLowerArm"},
+                {"LeftLowerArm", "LeftHand"},
+                {"RightLowerArm", "RightHand"},
+                {"LeftUpperLeg", "LeftLowerLeg"},
+                {"RightUpperLeg", "RightLowerLeg"},
+                {"LeftLowerLeg", "LeftFoot"},
+                {"RightLowerLeg", "RightFoot"}
+            }
+            
+            for i, connection in ipairs(boneConnections) do
+                local boneLine = esp.skeleton[i]
+                if boneLine then
+                    local part1 = character:FindFirstChild(connection[1])
+                    local part2 = character:FindFirstChild(connection[2])
+                    
+                    if part1 and part2 then
+                        local pos1, vis1 = camera:WorldToViewportPoint(part1.Position)
+                        local pos2, vis2 = camera:WorldToViewportPoint(part2.Position)
+                        
+                        if vis1 and vis2 then
+                            boneLine.Visible = true
+                            boneLine.From = Vector2.new(pos1.X, pos1.Y)
+                            boneLine.To = Vector2.new(pos2.X, pos2.Y)
+                            boneLine.Color = espColor
+                        else
+                            boneLine.Visible = false
+                        end
+                    else
+                        boneLine.Visible = false
+                    end
+                end
+            end
+        end
+        
+        -- Update Corner Box ESP
+        if Settings.espType == "Corner" then
+            local corners = {
+                Vector2.new(boxPosition.X, boxPosition.Y), -- Top Left
+                Vector2.new(boxPosition.X + width, boxPosition.Y), -- Top Right
+                Vector2.new(boxPosition.X, boxPosition.Y + height), -- Bottom Left
+                Vector2.new(boxPosition.X + width, boxPosition.Y + height), -- Bottom Right
+                Vector2.new(boxPosition.X + width/2, boxPosition.Y), -- Top Middle
+                Vector2.new(boxPosition.X + width/2, boxPosition.Y + height), -- Bottom Middle
+                Vector2.new(boxPosition.X, boxPosition.Y + height/2), -- Left Middle
+                Vector2.new(boxPosition.X + width, boxPosition.Y + height/2) -- Right Middle
+            }
+            
+            for i, cornerPos in ipairs(corners) do
+                local corner = esp.corners[i]
+                if corner then
+                    corner.Visible = true
+                    corner.Position = cornerPos - Vector2.new(Settings.cornerSize/2, Settings.cornerSize/2)
+                    corner.Color = espColor
+                end
+            end
+        end
+    end
+end
+
+local function removeESP(player)
+    local esp = espObjects[player]
+    if not esp then return end
     
-    -- Top Bar
-    self.topBar = Create("Frame", {
-        Parent = self.mainFrame,
-        Size = UDim2.new(1, 0, 0, 40),
-        BackgroundColor3 = self.currentTheme.Secondary,
-        BorderSizePixel = 0
-    })
+    -- Remove all drawings
+    esp.box:Remove()
+    esp.boxOutline:Remove()
+    esp.name:Remove()
+    esp.distance:Remove()
+    esp.health:Remove()
+    esp.tracer:Remove()
     
-    -- Title
-    self.title = Create("TextLabel", {
-        Parent = self.topBar,
-        Size = UDim2.new(0.6, 0, 1, 0),
-        Position = UDim2.new(0.05, 0, 0, 0),
-        BackgroundTransparency = 1,
-        Text = "🎨 " .. self.config.name,
-        TextColor3 = self.currentTheme.Text,
-        TextSize = 18,
-        Font = Enum.Font.GothamBold,
-        TextXAlignment = Enum.TextXAlignment.Left
-    })
+    for _, line in ipairs(esp.skeleton) do
+        line:Remove()
+    end
+    
+    for _, corner in ipairs(esp.corners) do
+        corner:Remove()
+    end
+    
+    espObjects[player] = nil
+end
+
+-- ============================================
+-- FIXED UI SYSTEM WITH WORKING TOGGLES
+-- ============================================
+local mainUI = nil
+local isUIVisible = false
+local toggleButtons = {} -- เก็บ reference ของ toggle buttons
+
+-- Function to create UI
+local function createUI()
+    if mainUI then 
+        mainUI:Destroy()
+        mainUI = nil
+    end
+    
+    mainUI = Instance.new("ScreenGui")
+    mainUI.Name = "VIP_Aimbot_UI"
+    mainUI.ResetOnSpawn = false
+    mainUI.IgnoreGuiInset = true
+    mainUI.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    mainUI.Parent = CoreGui
+    
+    -- Main Container
+    local mainContainer = Instance.new("Frame")
+    mainContainer.Name = "MainContainer"
+    mainContainer.Size = UDim2.new(0, 300, 0, 420)
+    mainContainer.Position = UDim2.new(0.5, -150, 0.5, -200)
+    mainContainer.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    mainContainer.BackgroundTransparency = 0.05
+    mainContainer.BorderSizePixel = 0
+    mainContainer.Active = true
+    mainContainer.Draggable = true
+    mainContainer.Visible = isUIVisible
+    mainContainer.Parent = mainUI
+    
+    local uiCorner = Instance.new("UICorner")
+    uiCorner.CornerRadius = UDim.new(0, 8)
+    uiCorner.Parent = mainContainer
+    
+    -- Title Bar
+    local titleBar = Instance.new("Frame")
+    titleBar.Name = "TitleBar"
+    titleBar.Size = UDim2.new(1, 0, 0, 30)
+    titleBar.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    titleBar.BorderSizePixel = 0
+    titleBar.Parent = mainContainer
+    
+    local titleCorner = Instance.new("UICorner")
+    titleCorner.CornerRadius = UDim.new(0, 8)
+    titleCorner.Parent = titleBar
+    
+    -- Title Text
+    local titleText = Instance.new("TextLabel")
+    titleText.Name = "TitleText"
+    titleText.Size = UDim2.new(1, -60, 1, 0)
+    titleText.Position = UDim2.new(0, 10, 0, 0)
+    titleText.BackgroundTransparency = 1
+    titleText.Text = "🎯Aimbot v1.2 BY : Kenta"
+    titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    titleText.Font = Enum.Font.GothamMedium
+    titleText.TextSize = 14
+    titleText.TextXAlignment = Enum.TextXAlignment.Left
+    titleText.Parent = titleBar
     
     -- Close Button
-    self.closeButton = Create("TextButton", {
-        Parent = self.topBar,
-        Size = UDim2.new(0, 30, 0, 30),
-        Position = UDim2.new(1, -35, 0.5, -15),
-        BackgroundColor3 = Color3.fromRGB(255, 76, 76),
-        Text = "✕",
-        TextColor3 = Color3.fromRGB(255, 255, 255),
-        TextSize = 16,
-        Font = Enum.Font.GothamBold
-    })
+    local closeButton = Instance.new("TextButton")
+    closeButton.Name = "CloseButton"
+    closeButton.Size = UDim2.new(0, 25, 0, 25)
+    closeButton.Position = UDim2.new(1, -30, 0.5, -12.5)
+    closeButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    closeButton.Text = "✕"
+    closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeButton.Font = Enum.Font.GothamBold
+    closeButton.TextSize = 14
+    closeButton.Parent = titleBar
     
-    self.closeButton.MouseButton1Click:Connect(function()
-        self:Hide()
-    end)
-    
-    -- Minimize Button
-    self.minimizeButton = Create("TextButton", {
-        Parent = self.topBar,
-        Size = UDim2.new(0, 30, 0, 30),
-        Position = UDim2.new(1, -70, 0.5, -15),
-        BackgroundColor3 = Color3.fromRGB(255, 193, 7),
-        Text = "—",
-        TextColor3 = Color3.fromRGB(255, 255, 255),
-        TextSize = 16,
-        Font = Enum.Font.GothamBold
-    })
-    
-    self.minimizeButton.MouseButton1Click:Connect(function()
-        self:ToggleSize()
-    end)
-    
-    -- Tab Container
-    self.tabContainer = Create("Frame", {
-        Parent = self.mainFrame,
-        Size = UDim2.new(1, -20, 0, 30),
-        Position = UDim2.new(0, 10, 0, 45),
-        BackgroundTransparency = 1
-    })
-    
-    -- Tab List Layout
-    self.tabLayout = Create("UIListLayout", {
-        Parent = self.tabContainer,
-        FillDirection = Enum.FillDirection.Horizontal,
-        HorizontalAlignment = Enum.HorizontalAlignment.Left,
-        VerticalAlignment = Enum.VerticalAlignment.Center,
-        SortOrder = Enum.SortOrder.LayoutOrder,
-        Padding = UDim.new(0, 5)
-    })
+    local closeCorner = Instance.new("UICorner")
+    closeCorner.CornerRadius = UDim.new(0, 4)
+    closeCorner.Parent = closeButton
     
     -- Content Frame
-    self.contentFrame = Create("Frame", {
-        Parent = self.mainFrame,
-        Size = UDim2.new(1, -20, 1, -80),
-        Position = UDim2.new(0, 10, 0, 80),
-        BackgroundTransparency = 1,
-        ClipsDescendants = true
-    })
+    local contentFrame = Instance.new("ScrollingFrame")
+    contentFrame.Name = "ContentFrame"
+    contentFrame.Size = UDim2.new(1, -20, 1, -50)
+    contentFrame.Position = UDim2.new(0, 10, 0, 40)
+    contentFrame.BackgroundTransparency = 1
+    contentFrame.BorderSizePixel = 0
+    contentFrame.ScrollBarThickness = 4
+    contentFrame.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 70)
+    contentFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+    contentFrame.VerticalScrollBarInset = Enum.ScrollBarInset.Always
+    contentFrame.Parent = mainContainer
     
-    -- Watermark
-    if self.config.watermark then
-        self.watermark = Create("TextLabel", {
-            Parent = self.screenGui,
-            Size = UDim2.new(0, 200, 0, 30),
-            Position = UDim2.new(0, 10, 1, -40),
-            BackgroundTransparency = 0.7,
-            BackgroundColor3 = self.currentTheme.Main,
-            Text = "🎨 Yun V2 | " .. self.config.name,
-            TextColor3 = self.currentTheme.Text,
-            TextSize = 14,
-            Font = Enum.Font.Gotham,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            BorderSizePixel = 0
-        })
+    local uiListLayout = Instance.new("UIListLayout")
+    uiListLayout.Padding = UDim.new(0, 8)
+    uiListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    uiListLayout.Parent = contentFrame
+    
+    local uiPadding = Instance.new("UIPadding")
+    uiPadding.PaddingLeft = UDim.new(0, 5)
+    uiPadding.PaddingRight = UDim.new(0, 5)
+    uiPadding.Parent = contentFrame
+    
+    -- Reset toggle buttons table
+    toggleButtons = {}
+    
+    -- FIXED: Helper function for toggle controls ที่ใช้งานได้จริง
+    local function createToggle(name, settingKey, callback)
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(1, -10, 0, 28)
+        frame.BackgroundTransparency = 1
+        frame.Parent = contentFrame
         
-        Create("UICorner", {Parent = self.watermark, CornerRadius = UDim.new(0, 5)})
-        Create("UIStroke", {
-            Parent = self.watermark,
-            Color = self.currentTheme.Accent,
-            Thickness = 1
-        })
-    end
-    
-    -- Add dragging functionality
-    self:Draggable(self.topBar)
-    
-    -- Add rounded corners
-    Create("UICorner", {Parent = self.mainFrame, CornerRadius = UDim.new(0, 8)})
-    Create("UICorner", {Parent = self.topBar, CornerRadius = UDim.new(0, 8, 0, 0)})
-    Create("UICorner", {Parent = self.closeButton, CornerRadius = UDim.new(0, 5)})
-    Create("UICorner", {Parent = self.minimizeButton, CornerRadius = UDim.new(0, 5)})
-    
-    -- Add shadow
-    local shadow = Create("ImageLabel", {
-        Parent = self.mainFrame,
-        Size = UDim2.new(1, 10, 1, 10),
-        Position = UDim2.new(0, -5, 0, -5),
-        BackgroundTransparency = 1,
-        Image = "rbxassetid://1316045217",
-        ImageColor3 = Color3.fromRGB(0, 0, 0),
-        ImageTransparency = 0.8,
-        ScaleType = Enum.ScaleType.Slice,
-        SliceCenter = Rect.new(10, 10, 118, 118),
-        ZIndex = -1
-    })
-    
-    -- Initial animation
-    self.mainFrame.Size = UDim2.new(0, 0, 0, 0)
-    Tween(self.mainFrame, {Size = UDim2.new(0, self.config.sizeX, 0, self.config.sizeY)}, 0.5)
-end
-
-function Window:StartRGBLoop()
-    spawn(function()
-        while self.config.rgbMode and self.screenGui and self.screenGui.Parent do
-            self.rgbHue = (self.rgbHue + (self.rgbSpeed / 1000)) % 1
-            local rgbColor = HSVtoRGB(self.rgbHue, 1, 1)
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(0.7, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.Text = name
+        label.TextColor3 = Color3.fromRGB(220, 220, 220)
+        label.Font = Enum.Font.Gotham
+        label.TextSize = 13
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Parent = frame
+        
+        local toggle = Instance.new("TextButton")
+        toggle.Name = settingKey -- ใช้ชื่อ setting เป็น key
+        toggle.Size = UDim2.new(0, 50, 0, 22)
+        toggle.Position = UDim2.new(0.7, 0, 0.5, -11)
+        toggle.BackgroundColor3 = Settings[settingKey] and Color3.fromRGB(0, 170, 255) or Color3.fromRGB(60, 60, 70)
+        toggle.Text = Settings[settingKey] and "ON" or "OFF"
+        toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+        toggle.Font = Enum.Font.GothamMedium
+        toggle.TextSize = 12
+        toggle.Parent = frame
+        
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 4)
+        corner.Parent = toggle
+        
+        -- เก็บ reference ของ toggle button
+        toggleButtons[settingKey] = toggle
+        
+        -- FIXED: Event handler ที่ใช้งานได้จริง
+        toggle.MouseButton1Click:Connect(function()
+            Settings[settingKey] = not Settings[settingKey]
             
-            -- Update accent colors
-            Tween(self.mainFrame, {
-                BackgroundColor3 = rgbColor:Lerp(Color3.fromRGB(20, 20, 20), 0.7)
-            }, 0.3)
+            -- อัพเดทปุ่มทันที
+            toggle.BackgroundColor3 = Settings[settingKey] and Color3.fromRGB(0, 170, 255) or Color3.fromRGB(60, 60, 70)
+            toggle.Text = Settings[settingKey] and "ON" or "OFF"
             
-            Tween(self.topBar, {
-                BackgroundColor3 = rgbColor:Lerp(Color3.fromRGB(10, 10, 10), 0.8)
-            }, 0.3)
-            
-            if self.watermark then
-                Tween(self.watermark.UIStroke, {Color = rgbColor}, 0.3)
+            -- เรียก callback ถ้ามี
+            if callback then
+                callback(Settings[settingKey])
             end
             
-            wait(0.05)
-        end
-    end)
-end
-
-function Window:Draggable(frame)
-    local dragging = false
-    local dragInput, mousePos, framePos
-    
-    frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            mousePos = input.Position
-            framePos = self.mainFrame.Position
-            
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
-        end
-    end)
-    
-    frame.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement then
-            dragInput = input
-        end
-    end)
-    
-    UserInputService.InputChanged:Connect(function(input)
-        if input == dragInput and dragging then
-            local delta = input.Position - mousePos
-            self.mainFrame.Position = UDim2.new(
-                framePos.X.Scale,
-                framePos.X.Offset + delta.X,
-                framePos.Y.Scale,
-                framePos.Y.Offset + delta.Y
-            )
-        end
-    end)
-end
-
-function Window:Tab(name, icon)
-    local tab = {}
-    tab.name = name
-    tab.icon = icon
-    
-    -- Tab Button
-    tab.button = Create("TextButton", {
-        Parent = self.tabContainer,
-        Size = UDim2.new(0, 80, 0, 25),
-        BackgroundColor3 = self.currentTheme.Secondary,
-        Text = (icon or "") .. " " .. name,
-        TextColor3 = self.currentTheme.Text,
-        TextSize = 14,
-        Font = Enum.Font.Gotham,
-        AutoButtonColor = false
-    })
-    
-    Create("UICorner", {Parent = tab.button, CornerRadius = UDim.new(0, 5)})
-    
-    -- Tab Content
-    tab.frame = Create("Frame", {
-        Parent = self.contentFrame,
-        Size = UDim2.new(1, 0, 1, 0),
-        BackgroundTransparency = 1,
-        Visible = false
-    })
-    
-    -- Scroll Frame
-    tab.scrollFrame = Create("ScrollingFrame", {
-        Parent = tab.frame,
-        Size = UDim2.new(1, 0, 1, 0),
-        BackgroundTransparency = 1,
-        ScrollBarThickness = 3,
-        ScrollBarImageColor3 = self.currentTheme.Accent,
-        CanvasSize = UDim2.new(0, 0, 0, 0),
-        AutomaticCanvasSize = Enum.AutomaticSize.Y
-    })
-    
-    Create("UIPadding", {
-        Parent = tab.scrollFrame,
-        PaddingLeft = UDim.new(0, 5),
-        PaddingRight = UDim.new(0, 5),
-        PaddingTop = UDim.new(0, 5),
-        PaddingBottom = UDim.new(0, 5)
-    })
-    
-    local layout = Create("UIListLayout", {
-        Parent = tab.scrollFrame,
-        SortOrder = Enum.SortOrder.LayoutOrder,
-        Padding = UDim.new(0, 5)
-    })
-    
-    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        tab.scrollFrame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
-    end)
-    
-    -- Button click event
-    tab.button.MouseButton1Click:Connect(function()
-        self:SwitchTab(tab)
-    end)
-    
-    -- Add hover effects
-    tab.button.MouseEnter:Connect(function()
-        Tween(tab.button, {BackgroundColor3 = self.currentTheme.Accent}, 0.2)
-    end)
-    
-    tab.button.MouseLeave:Connect(function()
-        if not tab.active then
-            Tween(tab.button, {BackgroundColor3 = self.currentTheme.Secondary}, 0.2)
-        end
-    end)
-    
-    tab.active = false
-    
-    -- Methods
-    function tab:Section(config)
-        local section = {}
-        section.name = config.name or "Section"
-        section.column = config.column or 1
-        
-        -- Section Frame
-        section.frame = Create("Frame", {
-            Parent = tab.scrollFrame,
-            Size = UDim2.new(1, -10, 0, 0),
-            BackgroundColor3 = self.currentTheme.Secondary,
-            AutomaticSize = Enum.AutomaticSize.Y
-        })
-        
-        Create("UICorner", {Parent = section.frame, CornerRadius = UDim.new(0, 8)})
-        Create("UIStroke", {
-            Parent = section.frame,
-            Color = self.currentTheme.Accent,
-            Thickness = 1
-        })
-        
-        -- Title
-        section.title = Create("TextLabel", {
-            Parent = section.frame,
-            Size = UDim2.new(1, -20, 0, 30),
-            Position = UDim2.new(0, 10, 0, 0),
-            BackgroundTransparency = 1,
-            Text = "📁 " .. section.name,
-            TextColor3 = self.currentTheme.Text,
-            TextSize = 16,
-            Font = Enum.Font.GothamBold,
-            TextXAlignment = Enum.TextXAlignment.Left
-        })
-        
-        -- Content Layout
-        section.layout = Create("UIListLayout", {
-            Parent = section.frame,
-            SortOrder = Enum.SortOrder.LayoutOrder,
-            Padding = UDim.new(0, 8)
-        })
-        
-        Create("UIPadding", {
-            Parent = section.frame,
-            PaddingLeft = UDim.new(0, 10),
-            PaddingRight = UDim.new(0, 10),
-            PaddingTop = UDim.new(0, 35),
-            PaddingBottom = UDim.new(0, 10)
-        })
-        
-        section.layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-            section.frame.Size = UDim2.new(1, -10, 0, section.layout.AbsoluteContentSize.Y + 45)
+            -- อัพเดท visual ถ้าจำเป็น
+            if settingKey == "showFOV" then
+                FOVring.Visible = Settings[settingKey]
+            elseif settingKey == "fovFilled" then
+                FOVring.Filled = Settings[settingKey]
+            elseif settingKey == "espEnabled" then
+                -- อัพเดท ESP visibility
+                updateESP()
+            end
         end)
         
-        -- Methods
-        function section:Toggle(config)
-            local toggle = {}
-            toggle.value = config.default or false
-            
-            toggle.frame = Create("Frame", {
-                Parent = section.frame,
-                Size = UDim2.new(1, 0, 0, 30),
-                BackgroundTransparency = 1
-            })
-            
-            toggle.text = Create("TextLabel", {
-                Parent = toggle.frame,
-                Size = UDim2.new(0.7, 0, 1, 0),
-                BackgroundTransparency = 1,
-                Text = config.name or "Toggle",
-                TextColor3 = self.currentTheme.Text,
-                TextSize = 14,
-                Font = Enum.Font.Gotham,
-                TextXAlignment = Enum.TextXAlignment.Left
-            })
-            
-            toggle.button = Create("Frame", {
-                Parent = toggle.frame,
-                Size = UDim2.new(0, 50, 0, 25),
-                Position = UDim2.new(1, -55, 0.5, -12.5),
-                BackgroundColor3 = toggle.value and DefaultColors.Success or DefaultColors.Secondary,
-                BackgroundTransparency = 0.2
-            })
-            
-            Create("UICorner", {Parent = toggle.button, CornerRadius = UDim.new(1, 0)})
-            
-            toggle.indicator = Create("Frame", {
-                Parent = toggle.button,
-                Size = UDim2.new(0, 18, 0, 18),
-                Position = toggle.value and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9),
-                BackgroundColor3 = self.currentTheme.Text,
-                BackgroundTransparency = 0.2
-            })
-            
-            Create("UICorner", {Parent = toggle.indicator, CornerRadius = UDim.new(1, 0)})
-            
-            local clickArea = Create("TextButton", {
-                Parent = toggle.frame,
-                Size = UDim2.new(1, 0, 1, 0),
-                BackgroundTransparency = 1,
-                Text = ""
-            })
-            
-            clickArea.MouseButton1Click:Connect(function()
-                toggle.value = not toggle.value
-                
-                Tween(toggle.button, {
-                    BackgroundColor3 = toggle.value and DefaultColors.Success or DefaultColors.Secondary
-                }, 0.2)
-                
-                Tween(toggle.indicator, {
-                    Position = toggle.value and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
-                }, 0.2)
-                
-                if config.callback then
-                    config.callback(toggle.value)
-                end
-            end)
-            
-            -- Add to flags
-            if config.flag then
-                self.flags[config.flag] = toggle
-            end
-            
-            return toggle
-        end
+        return frame
+    end
+    
+    -- Helper function for slider controls
+    local function createSlider(name, settingKey, min, max, callback)
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(1, -10, 0, 40)
+        frame.BackgroundTransparency = 1
+        frame.Parent = contentFrame
         
-        function section:Button(config)
-            local button = {}
-            
-            button.frame = Create("TextButton", {
-                Parent = section.frame,
-                Size = UDim2.new(1, 0, 0, 35),
-                BackgroundColor3 = self.currentTheme.Accent,
-                Text = config.name or "Button",
-                TextColor3 = self.currentTheme.Text,
-                TextSize = 14,
-                Font = Enum.Font.Gotham,
-                AutoButtonColor = false
-            })
-            
-            Create("UICorner", {Parent = button.frame, CornerRadius = UDim.new(0, 5)})
-            
-            button.frame.MouseButton1Click:Connect(function()
-                Tween(button.frame, {BackgroundColor3 = DefaultColors.Warning}, 0.1)
-                wait(0.1)
-                Tween(button.frame, {BackgroundColor3 = self.currentTheme.Accent}, 0.1)
-                
-                if config.callback then
-                    config.callback()
-                end
-            end)
-            
-            button.frame.MouseEnter:Connect(function()
-                Tween(button.frame, {BackgroundColor3 = self.currentTheme.Accent:Lerp(Color3.fromRGB(255, 255, 255), 0.2)}, 0.2)
-            end)
-            
-            button.frame.MouseLeave:Connect(function()
-                Tween(button.frame, {BackgroundColor3 = self.currentTheme.Accent}, 0.2)
-            end)
-            
-            return button
-        end
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, 0, 0, 18)
+        label.BackgroundTransparency = 1
+        label.Text = name .. ": " .. Settings[settingKey]
+        label.TextColor3 = Color3.fromRGB(220, 220, 220)
+        label.Font = Enum.Font.Gotham
+        label.TextSize = 13
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Parent = frame
         
-        function section:Slider(config)
-            local slider = {}
-            slider.value = config.default or config.min or 0
-            
-            slider.frame = Create("Frame", {
-                Parent = section.frame,
-                Size = UDim2.new(1, 0, 0, 60),
-                BackgroundTransparency = 1
-            })
-            
-            slider.text = Create("TextLabel", {
-                Parent = slider.frame,
-                Size = UDim2.new(1, 0, 0, 20),
-                BackgroundTransparency = 1,
-                Text = config.name or "Slider",
-                TextColor3 = self.currentTheme.Text,
-                TextSize = 14,
-                Font = Enum.Font.Gotham,
-                TextXAlignment = Enum.TextXAlignment.Left
-            })
-            
-            slider.valueText = Create("TextLabel", {
-                Parent = slider.frame,
-                Size = UDim2.new(0, 50, 0, 20),
-                Position = UDim2.new(1, -50, 0, 0),
-                BackgroundTransparency = 1,
-                Text = tostring(slider.value),
-                TextColor3 = self.currentTheme.Text,
-                TextSize = 14,
-                Font = Enum.Font.Gotham,
-                TextXAlignment = Enum.TextXAlignment.Right
-            })
-            
-            slider.track = Create("Frame", {
-                Parent = slider.frame,
-                Size = UDim2.new(1, 0, 0, 5),
-                Position = UDim2.new(0, 0, 0, 30),
-                BackgroundColor3 = self.currentTheme.Secondary
-            })
-            
-            Create("UICorner", {Parent = slider.track, CornerRadius = UDim.new(1, 0)})
-            
-            slider.fill = Create("Frame", {
-                Parent = slider.track,
-                Size = UDim2.new((slider.value - (config.min or 0)) / ((config.max or 100) - (config.min or 0)), 0, 1, 0),
-                BackgroundColor3 = self.currentTheme.Accent
-            })
-            
-            Create("UICorner", {Parent = slider.fill, CornerRadius = UDim.new(1, 0)})
-            
-            slider.thumb = Create("Frame", {
-                Parent = slider.track,
-                Size = UDim2.new(0, 15, 0, 15),
-                Position = UDim2.new(slider.fill.Size.X.Scale, -7.5, 0.5, -7.5),
-                BackgroundColor3 = self.currentTheme.Text
-            })
-            
-            Create("UICorner", {Parent = slider.thumb, CornerRadius = UDim.new(1, 0)})
-            
-            local dragging = false
-            
-            local function update(value)
-                value = math.clamp(value, config.min or 0, config.max or 100)
-                if config.decimals then
-                    value = math.floor(value * (10 ^ config.decimals)) / (10 ^ config.decimals)
+        local sliderFrame = Instance.new("Frame")
+        sliderFrame.Size = UDim2.new(1, 0, 0, 4)
+        sliderFrame.Position = UDim2.new(0, 0, 1, -16)
+        sliderFrame.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+        sliderFrame.Parent = frame
+        
+        local sliderCorner = Instance.new("UICorner")
+        sliderCorner.CornerRadius = UDim.new(0, 2)
+        sliderCorner.Parent = sliderFrame
+        
+        local fill = Instance.new("Frame")
+        fill.Size = UDim2.new((Settings[settingKey] - min) / (max - min), 0, 1, 0)
+        fill.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+        fill.Parent = sliderFrame
+        
+        local fillCorner = Instance.new("UICorner")
+        fillCorner.CornerRadius = UDim.new(0, 2)
+        fillCorner.Parent = fill
+        
+        -- Simple click to adjust
+        sliderFrame.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                local percent = (input.Position.X - sliderFrame.AbsolutePosition.X) / sliderFrame.AbsoluteSize.X
+                local newValue = math.floor(min + (max - min) * math.clamp(percent, 0, 1))
+                
+                -- อัพเดทค่าใน Settings
+                Settings[settingKey] = newValue
+                
+                -- อัพเดท UI
+                fill.Size = UDim2.new(percent, 0, 1, 0)
+                label.Text = name .. ": " .. newValue
+                
+                -- เรียก callback
+                if callback then
+                    callback(newValue)
                 end
                 
-                slider.value = value
-                slider.valueText.Text = tostring(value)
-                
-                local percentage = (value - (config.min or 0)) / ((config.max or 100) - (config.min or 0))
-                slider.fill.Size = UDim2.new(percentage, 0, 1, 0)
-                slider.thumb.Position = UDim2.new(percentage, -7.5, 0.5, -7.5)
-                
-                if config.callback then
-                    config.callback(value)
+                -- อัพเดท FOV ถ้าจำเป็น
+                if settingKey == "fov" then
+                    FOVring.Radius = newValue
                 end
             end
-            
-            slider.track.InputBegan:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                    dragging = true
-                end
-            end)
-            
-            slider.track.InputEnded:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                    dragging = false
-                end
-            end)
-            
-            slider.track.InputBegan:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                    local pos = input.Position.X - slider.track.AbsolutePosition.X
-                    local percentage = pos / slider.track.AbsoluteSize.X
-                    update(percentage * ((config.max or 100) - (config.min or 0)) + (config.min or 0))
-                end
-            end)
-            
-            UserInputService.InputChanged:Connect(function(input)
-                if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-                    local pos = input.Position.X - slider.track.AbsolutePosition.X
-                    local percentage = math.clamp(pos / slider.track.AbsoluteSize.X, 0, 1)
-                    update(percentage * ((config.max or 100) - (config.min or 0)) + (config.min or 0))
-                end
-            end)
-            
-            return slider
-        end
+        end)
+    end
+    
+    -- Section Divider
+    local function createDivider(text)
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(1, -10, 0, 20)
+        frame.BackgroundTransparency = 1
+        frame.Parent = contentFrame
         
-        function section:Dropdown(config)
-            local dropdown = {}
-            dropdown.open = false
-            dropdown.value = config.default or config.content[1] or ""
-            
-            dropdown.frame = Create("Frame", {
-                Parent = section.frame,
-                Size = UDim2.new(1, 0, 0, 35),
-                BackgroundColor3 = self.currentTheme.Secondary,
-                ClipsDescendants = true
-            })
-            
-            Create("UICorner", {Parent = dropdown.frame, CornerRadius = UDim.new(0, 5)})
-            
-            dropdown.text = Create("TextLabel", {
-                Parent = dropdown.frame,
-                Size = UDim2.new(0.8, 0, 1, 0),
-                Position = UDim2.new(0, 10, 0, 0),
-                BackgroundTransparency = 1,
-                Text = config.name or "Dropdown",
-                TextColor3 = self.currentTheme.Text,
-                TextSize = 14,
-                Font = Enum.Font.Gotham,
-                TextXAlignment = Enum.TextXAlignment.Left
-            })
-            
-            dropdown.valueText = Create("TextLabel", {
-                Parent = dropdown.frame,
-                Size = UDim2.new(0.5, 0, 1, 0),
-                Position = UDim2.new(0.5, 0, 0, 0),
-                BackgroundTransparency = 1,
-                Text = dropdown.value,
-                TextColor3 = self.currentTheme.Accent,
-                TextSize = 14,
-                Font = Enum.Font.Gotham,
-                TextXAlignment = Enum.TextXAlignment.Right
-            })
-            
-            dropdown.arrow = Create("TextLabel", {
-                Parent = dropdown.frame,
-                Size = UDim2.new(0, 20, 0, 20),
-                Position = UDim2.new(1, -25, 0.5, -10),
-                BackgroundTransparency = 1,
-                Text = "▼",
-                TextColor3 = self.currentTheme.Text,
-                TextSize = 12,
-                Font = Enum.Font.Gotham
-            })
-            
-            dropdown.optionsFrame = Create("Frame", {
-                Parent = dropdown.frame,
-                Size = UDim2.new(1, 0, 0, 0),
-                Position = UDim2.new(0, 0, 1, 5),
-                BackgroundColor3 = self.currentTheme.Main,
-                Visible = false
-            })
-            
-            Create("UICorner", {Parent = dropdown.optionsFrame, CornerRadius = UDim.new(0, 5)})
-            Create("UIStroke", {
-                Parent = dropdown.optionsFrame,
-                Color = self.currentTheme.Accent,
-                Thickness = 1
-            })
-            
-            local optionsLayout = Create("UIListLayout", {
-                Parent = dropdown.optionsFrame,
-                SortOrder = Enum.SortOrder.LayoutOrder,
-                Padding = UDim.new(0, 2)
-            })
-            
-            Create("UIPadding", {
-                Parent = dropdown.optionsFrame,
-                PaddingTop = UDim.new(0, 5),
-                PaddingBottom = UDim.new(0, 5)
-            })
-            
-            for _, option in pairs(config.content or {}) do
-                local optionButton = Create("TextButton", {
-                    Parent = dropdown.optionsFrame,
-                    Size = UDim2.new(1, -10, 0, 25),
-                    Position = UDim2.new(0, 5, 0, 0),
-                    BackgroundColor3 = self.currentTheme.Secondary,
-                    Text = option,
-                    TextColor3 = self.currentTheme.Text,
-                    TextSize = 14,
-                    Font = Enum.Font.Gotham,
-                    AutoButtonColor = false
-                })
-                
-                Create("UICorner", {Parent = optionButton, CornerRadius = UDim.new(0, 3)})
-                
-                optionButton.MouseButton1Click:Connect(function()
-                    dropdown.value = option
-                    dropdown.valueText.Text = option
-                    dropdown.open = false
-                    
-                    Tween(dropdown.optionsFrame, {Size = UDim2.new(1, 0, 0, 0)}, 0.2)
-                    wait(0.2)
-                    dropdown.optionsFrame.Visible = false
-                    
-                    if config.callback then
-                        config.callback(option)
-                    end
-                end)
-                
-                optionButton.MouseEnter:Connect(function()
-                    Tween(optionButton, {BackgroundColor3 = self.currentTheme.Accent}, 0.2)
-                end)
-                
-                optionButton.MouseLeave:Connect(function()
-                    Tween(optionButton, {BackgroundColor3 = self.currentTheme.Secondary}, 0.2)
-                end)
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.Text = "─ " .. text .. " ─"
+        label.TextColor3 = Color3.fromRGB(150, 150, 170)
+        label.Font = Enum.Font.GothamMedium
+        label.TextSize = 12
+        label.Parent = frame
+        
+        return frame
+    end
+    
+    -- Create Settings Sections ด้วย createToggle แบบใหม่
+    createDivider("🎯 AIMBOT")
+    createToggle("Enabled", "aimbotEnabled", function(v)
+        -- อัพเดท aimbot state
+        if not v then
+            currentTarget = nil
+        end
+    end)
+    
+    createToggle("Toggle Mode (E)", "Toggle", function(v)
+        -- ไม่ต้องทำอะไรเพิ่ม
+    end)
+    
+    createToggle("Team Check", "teamCheck", function(v)
+        -- ไม่ต้องทำอะไรเพิ่ม
+    end)
+    
+    createSlider("FOV Size", "fov", 50, 300, function(v)
+        FOVring.Radius = v
+    end)
+    
+    createSlider("Smoothing %", "smoothing", 1, 50, function(v)
+        Settings.smoothing = v / 100
+    end)
+    
+    createSlider("Prediction %", "predictionFactor", 0, 30, function(v)
+        Settings.predictionFactor = v / 100
+    end)
+    
+    createDivider("👁️ ESP")
+    createToggle("Enabled", "espEnabled", function(v)
+        updateESP()
+    end)
+    
+    createToggle("ESP Boxes", "espBoxes", function(v)
+        updateESP()
+    end)
+    
+    createToggle("ESP Names", "espNames", function(v)
+        updateESP()
+    end)
+    
+    createToggle("ESP Distance", "espDistance", function(v)
+        updateESP()
+    end)
+    
+    createToggle("ESP Health", "espHealth", function(v)
+        updateESP()
+    end)
+    
+    createToggle("ESP Tracers", "espTracers", function(v)
+        updateESP()
+    end)
+    
+    createDivider("🌈 RGB COLORS")
+    createToggle("RGB Mode", "useRGBColors", function(v)
+        -- อัพเดทสี ESP
+        updateESP()
+    end)
+    
+    createToggle("Rainbow Mode", "espRainbow", function(v)
+        -- อัพเดทสี ESP
+        updateESP()
+    end)
+    
+    createToggle("Team Colors", "espTeamColor", function(v)
+        updateESP()
+    end)
+    
+    createDivider("✨ VISUALS")
+    createToggle("Show FOV", "showFOV", function(v)
+        FOVring.Visible = v
+    end)
+    
+    createToggle("Filled FOV", "fovFilled", function(v)
+        FOVring.Filled = v
+    end)
+    
+    -- Panic Button
+    local panicFrame = Instance.new("Frame")
+    panicFrame.Size = UDim2.new(1, -10, 0, 35)
+    panicFrame.BackgroundTransparency = 1
+    panicFrame.Parent = contentFrame
+    
+    local panicButton = Instance.new("TextButton")
+    panicButton.Size = UDim2.new(1, 0, 1, 0)
+    panicButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    panicButton.Text = "🚨 PANIC MODE (DEL)"
+    panicButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    panicButton.Font = Enum.Font.GothamMedium
+    panicButton.TextSize = 13
+    panicButton.Parent = panicFrame
+    
+    local panicCorner = Instance.new("UICorner")
+    panicCorner.CornerRadius = UDim.new(0, 6)
+    panicCorner.Parent = panicButton
+    
+    panicButton.MouseButton1Click:Connect(function()
+        -- ปิดทุกฟีเจอร์
+        Settings.aimbotEnabled = false
+        Settings.espEnabled = false
+        toggleState = false
+        
+        -- อัพเดท toggle buttons ทันที
+        for key, toggle in pairs(toggleButtons) do
+            if toggle and toggle:IsA("TextButton") then
+                toggle.BackgroundColor3 = Settings[key] and Color3.fromRGB(0, 170, 255) or Color3.fromRGB(60, 60, 70)
+                toggle.Text = Settings[key] and "ON" or "OFF"
             end
-            
-            optionsLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-                dropdown.optionsFrame.Size = UDim2.new(1, 0, 0, optionsLayout.AbsoluteContentSize.Y + 10)
-            end)
-            
-            dropdown.frame.InputBegan:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                    dropdown.open = not dropdown.open
-                    
-                    if dropdown.open then
-                        dropdown.optionsFrame.Visible = true
-                        Tween(dropdown.optionsFrame, {
-                            Size = UDim2.new(1, 0, 0, optionsLayout.AbsoluteContentSize.Y + 10)
-                        }, 0.2)
-                        Tween(dropdown.arrow, {Rotation = 180}, 0.2)
-                    else
-                        Tween(dropdown.optionsFrame, {Size = UDim2.new(1, 0, 0, 0)}, 0.2)
-                        wait(0.2)
-                        dropdown.optionsFrame.Visible = false
-                        Tween(dropdown.arrow, {Rotation = 0}, 0.2)
-                    end
+        end
+        
+        -- ปิด UI
+        mainContainer.Visible = false
+        isUIVisible = false
+    end)
+    
+    -- Update canvas size
+    task.spawn(function()
+        task.wait(0.1)
+        if contentFrame and uiListLayout then
+            contentFrame.CanvasSize = UDim2.new(0, 0, 0, uiListLayout.AbsoluteContentSize.Y + 20)
+        end
+    end)
+    
+    -- EVENT HANDLERS
+    closeButton.MouseButton1Click:Connect(function()
+        mainContainer.Visible = false
+        isUIVisible = false
+    end)
+    
+    return mainContainer
+end
+
+-- Function to toggle UI visibility
+local function toggleUI()
+    isUIVisible = not isUIVisible
+    
+    if not mainUI then
+        createUI()
+    end
+    
+    local mainContainer = mainUI:FindFirstChild("MainContainer")
+    if mainContainer then
+        mainContainer.Visible = isUIVisible
+    else
+        createUI()
+        mainUI:FindFirstChild("MainContainer").Visible = isUIVisible
+    end
+end
+
+-- ============================================
+-- INITIALIZATION
+-- ============================================
+-- Create ESP for existing players
+for _, player in pairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then
+        createESP(player)
+    end
+end
+
+Players.PlayerAdded:Connect(function(player)
+    task.wait(1)
+    if player ~= LocalPlayer then
+        createESP(player)
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    removeESP(player)
+end)
+
+-- ============================================
+-- KEYBINDS
+-- ============================================
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    -- Toggle aimbot with E (เฉพาะเมื่อเปิด Toggle Mode)
+    if input.KeyCode == Enum.KeyCode.E then
+        if Settings.Toggle then
+            toggleState = not toggleState
+            print("🎯 Aimbot Toggle: " .. (toggleState and "ON" or "OFF"))
+        end
+    end
+    
+    -- Toggle UI with RightShift
+    if input.KeyCode == Enum.KeyCode.RightShift then
+        toggleUI()
+    end
+    
+    -- Panic mode with Delete
+    if input.KeyCode == Enum.KeyCode.Delete then
+        Settings.aimbotEnabled = false
+        Settings.espEnabled = false
+        toggleState = false
+        
+        -- อัพเดท toggle buttons ถ้ามี UI
+        if mainUI and toggleButtons then
+            for key, toggle in pairs(toggleButtons) do
+                if toggle and toggle:IsA("TextButton") then
+                    toggle.BackgroundColor3 = Settings[key] and Color3.fromRGB(0, 170, 255) or Color3.fromRGB(60, 60, 70)
+                    toggle.Text = Settings[key] and "ON" or "OFF"
                 end
-            end)
-            
-            return dropdown
-        end
-        
-        function section:Label(text)
-            local label = {}
-            
-            label.frame = Create("TextLabel", {
-                Parent = section.frame,
-                Size = UDim2.new(1, 0, 0, 25),
-                BackgroundTransparency = 1,
-                Text = text,
-                TextColor3 = self.currentTheme.Text,
-                TextSize = 14,
-                Font = Enum.Font.Gotham,
-                TextXAlignment = Enum.TextXAlignment.Left
-            })
-            
-            function label:Set(newText)
-                label.frame.Text = newText
             end
-            
-            return label
         end
         
-        function section:SpecialLabel(text)
-            local label = {}
-            
-            label.frame = Create("TextLabel", {
-                Parent = section.frame,
-                Size = UDim2.new(1, 0, 0, 25),
-                BackgroundTransparency = 1,
-                Text = text,
-                TextColor3 = self.currentTheme.Accent,
-                TextSize = 16,
-                Font = Enum.Font.GothamBold,
-                TextXAlignment = Enum.TextXAlignment.Center
-            })
-            
-            function label:Set(newText)
-                label.frame.Text = newText
-            end
-            
-            return label
+        print("🚨 Panic Mode Activated!")
+    end
+end)
+
+-- ============================================
+-- MAIN LOOP
+-- ============================================
+RunService.RenderStepped:Connect(function()
+    -- Update FOV circle
+    FOVring.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+    
+    -- Update ESP
+    updateESP()
+    
+    -- Update FOV color with RGB
+    if Settings.useRGBColors then
+        FOVring.Color = getRainbowColor()
+    end
+    
+    -- Update Aimbot
+    updateAimbot()
+end)
+
+-- ============================================
+-- STARTUP
+-- ============================================
+-- Create UI but hide it initially
+task.spawn(function()
+    task.wait(1)
+    createUI()
+    if mainUI then
+        local container = mainUI:FindFirstChild("MainContainer")
+        if container then
+            container.Visible = false
         end
-        
-        function section:ColorPicker(config)
-            local colorPicker = {}
-            colorPicker.value = config.default or Color3.fromRGB(255, 255, 255)
-            
-            colorPicker.frame = Create("Frame", {
-                Parent = section.frame,
-                Size = UDim2.new(1, 0, 0, 35),
-                BackgroundTransparency = 1
-            })
-            
-            colorPicker.text = Create("TextLabel", {
-                Parent = colorPicker.frame,
-                Size = UDim2.new(0.7, 0, 1, 0),
-                BackgroundTransparency = 1,
-                Text = config.name or "Color",
-                TextColor3 = self.currentTheme.Text,
-                TextSize = 14,
-                Font = Enum.Font.Gotham,
-                TextXAlignment = Enum.TextXAlignment.Left
-            })
-            
-            colorPicker.preview = Create("Frame", {
-                Parent = colorPicker.frame,
-                Size = UDim2.new(0, 50, 0, 25),
-                Position = UDim2.new(1, -55, 0.5, -12.5),
-                BackgroundColor3 = colorPicker.value
-            })
-            
-            Create("
+    end
+end)
+
+print("✅  Aimbot v3.0 BY : kenta eiei - With Working Aimbot Loaded!")
+print("🎮 Features:")
+print("   • Working Aimbot System")
+print("   • Toggle Buttons (ON/OFF works!)")
+print("   • Optimized 2D ESP")
+print("   • RGB Color System")
+print("🎯 Controls:")
+print("   E = Toggle Aimbot (when Toggle Mode is ON)")
+print("   RightShift = Toggle UI")
+print("   Delete = Panic Mode")
+print("🎯 Aimbot Settings:")
+print("   • FOV: " .. Settings.fov)
+print("   • Smoothing: " .. (Settings.smoothing * 100) .. "%")
+print("   • Prediction: " .. (Settings.predictionFactor * 100) .. "%")
+print("   • Lock Mode: " .. Settings.lockMode)
+print("https://www.youtube.com/@KENTAAAEIEI")
